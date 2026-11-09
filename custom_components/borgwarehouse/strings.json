@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to BorgWarehouse",
+        "description": "Enter the URL of your BorgWarehouse server and a Bearer API token with read permissions.",
+        "data": {
+          "url": "Server URL",
+          "api_key": "API Key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the server. Please verify the URL and network connectivity.",
+      "invalid_auth": "Authentication failed. Check your API key and permissions.",
+      "invalid_url": "The URL is invalid. Please include scheme (e.g. https://).",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This BorgWarehouse server is already configured."
+    }
+  }
+}
