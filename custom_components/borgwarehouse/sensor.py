@@ -42,19 +42,73 @@ def _parse_timestamp(raw_value: Any) -> datetime | None:
         return None
 
 
-def _calc_usage_percent(repo: dict[str, Any]) -> float | None:
-    """Calculate percentage of storage used."""
-    storage_used = repo.get("storageUsed") or repo.get("storage_used")
-    quota = repo.get("quota")
-
-    if storage_used is not None and quota:
+def _get_storage_used_bytes(repo: dict[str, Any]) -> int | None:
+    """Extract storage used in bytes."""
+    val = (
+        repo.get("storageUsed")
+        or repo.get("storage_used")
+        or repo.get("size")
+        or repo.get("total_size")
+        or repo.get("diskUsage")
+    )
+    if val is not None:
         try:
-            used_val = float(storage_used)
-            quota_val = float(quota)
-            if quota_val > 0:
-                return round((used_val / quota_val) * 100, 1)
+            return int(float(val))
         except (ValueError, TypeError):
             pass
+    return None
+
+
+def _get_quota_bytes(repo: dict[str, Any]) -> int | None:
+    """Extract storage quota normalized to bytes."""
+    raw = (
+        repo.get("quota")
+        or repo.get("storageQuota")
+        or repo.get("quotaSize")
+        or repo.get("maxStorage")
+        or repo.get("limit")
+    )
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+        if val <= 0:
+            return None
+        # If value is small, it was expressed in GB; convert to bytes for consistency
+        if val < 1_000_000:
+            return int(val * (1024**3))
+        return int(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _calc_usage_percent(repo: dict[str, Any]) -> float | None:
+    """Calculate percentage of storage used."""
+    storage_used = _get_storage_used_bytes(repo)
+    quota = _get_quota_bytes(repo)
+
+    if storage_used is not None and quota and quota > 0:
+        return round((storage_used / quota) * 100, 1)
+    return None
+
+
+def _get_last_backup(repo: dict[str, Any]) -> datetime | None:
+    """Extract and parse the last backup timestamp."""
+    candidates = [
+        repo.get("lastBackup"),
+        repo.get("last_backup"),
+        repo.get("latestBackup"),
+        repo.get("lastArchive"),
+        repo.get("last_archive"),
+        repo.get("lastSeen"),
+        repo.get("last_seen"),
+        repo.get("updatedAt"),
+        repo.get("lastBackupDate"),
+    ]
+    for candidate in candidates:
+        parsed = _parse_timestamp(candidate)
+        if parsed:
+            return parsed
     return None
 
 
@@ -62,17 +116,17 @@ SENSOR_DESCRIPTIONS: tuple[BorgWarehouseSensorEntityDescription, ...] = (
     BorgWarehouseSensorEntityDescription(
         key="storage_used",
         name="Storage used",
-        native_unit_of_measurement=UnitOfInformation.GIGABYTES,
+        native_unit_of_measurement=UnitOfInformation.BYTES,
         device_class=SensorDeviceClass.DATA_SIZE,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda repo: repo.get("storageUsed") or repo.get("storage_used"),
+        value_fn=_get_storage_used_bytes,
     ),
     BorgWarehouseSensorEntityDescription(
         key="quota",
         name="Quota",
-        native_unit_of_measurement=UnitOfInformation.GIGABYTES,
+        native_unit_of_measurement=UnitOfInformation.BYTES,
         device_class=SensorDeviceClass.DATA_SIZE,
-        value_fn=lambda repo: repo.get("quota"),
+        value_fn=_get_quota_bytes,
     ),
     BorgWarehouseSensorEntityDescription(
         key="usage_percent",
@@ -85,7 +139,7 @@ SENSOR_DESCRIPTIONS: tuple[BorgWarehouseSensorEntityDescription, ...] = (
         key="last_backup",
         name="Last backup",
         device_class=SensorDeviceClass.TIMESTAMP,
-        value_fn=lambda repo: _parse_timestamp(repo.get("lastBackup") or repo.get("last_backup")),
+        value_fn=_get_last_backup,
     ),
 )
 
@@ -147,10 +201,8 @@ class BorgWarehouseSensor(CoordinatorEntity[BorgWarehouseCoordinator], SensorEnt
         repo = self.coordinator.data.get(self.repo_id, {})
         attrs: dict[str, Any] = {}
         if self.entity_description.key == "storage_used":
-            if "comment" in repo and repo["comment"]:
-                attrs["comment"] = repo["comment"]
-            if "appendOnly" in repo:
-                attrs["append_only"] = repo["appendOnly"]
+            # Expose raw repo dictionary for easy inspection and debugging
+            attrs["raw_repo_data"] = repo
             if "repositoryName" in repo:
                 attrs["repository_name"] = repo["repositoryName"]
         return attrs

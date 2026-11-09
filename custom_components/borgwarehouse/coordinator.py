@@ -44,6 +44,7 @@ class BorgWarehouseCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]])
                     raise UpdateFailed(f"HTTP error {resp.status} while fetching repositories from BorgWarehouse.")
 
                 data = await resp.json()
+                _LOGGER.info("BorgWarehouse API raw response: %s", data)
 
                 if isinstance(data, dict):
                     repo_list = data.get("repoList") or data.get("repositories") or data.get("data") or []
