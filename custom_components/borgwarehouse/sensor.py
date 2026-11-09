@@ -31,42 +31,47 @@ class BorgWarehouseSensorEntityDescription(SensorEntityDescription):
 
 
 def _parse_timestamp(raw_value: Any) -> datetime | None:
-    """Parse string timestamp into a UTC datetime."""
+    """Parse string or epoch timestamp into a UTC datetime."""
     if not raw_value:
         return None
     if isinstance(raw_value, datetime):
         return raw_value
     try:
+        # Check if Unix timestamp (int or float)
+        if isinstance(raw_value, (int, float)):
+            return dt_util.utc_from_timestamp(raw_value)
+        if isinstance(raw_value, str) and raw_value.replace(".", "", 1).isdigit():
+            return dt_util.utc_from_timestamp(float(raw_value))
         return dt_util.parse_datetime(str(raw_value))
     except Exception:
         return None
 
 
 def _get_storage_used_bytes(repo: dict[str, Any]) -> int | None:
-    """Extract storage used in bytes."""
+    """Extract storage used in bytes (BorgWarehouse reports storageUsed in KB)."""
     val = (
         repo.get("storageUsed")
         or repo.get("storage_used")
         or repo.get("size")
         or repo.get("total_size")
-        or repo.get("diskUsage")
     )
     if val is not None:
         try:
-            return int(float(val))
+            # BorgWarehouse storageUsed is in Kilobytes (from du -k)
+            return int(float(val) * 1024)
         except (ValueError, TypeError):
             pass
     return None
 
 
 def _get_quota_bytes(repo: dict[str, Any]) -> int | None:
-    """Extract storage quota normalized to bytes."""
+    """Extract storage quota normalized to bytes (BorgWarehouse reports storageSize in GB)."""
     raw = (
-        repo.get("quota")
+        repo.get("storageSize")
+        or repo.get("quota")
         or repo.get("storageQuota")
         or repo.get("quotaSize")
         or repo.get("maxStorage")
-        or repo.get("limit")
     )
     if raw is None:
         return None
@@ -74,7 +79,7 @@ def _get_quota_bytes(repo: dict[str, Any]) -> int | None:
         val = float(raw)
         if val <= 0:
             return None
-        # If value is small, it was expressed in GB; convert to bytes for consistency
+        # In BorgWarehouse, storageSize is configured in GB
         if val < 1_000_000:
             return int(val * (1024**3))
         return int(val)
@@ -88,27 +93,25 @@ def _calc_usage_percent(repo: dict[str, Any]) -> float | None:
     quota = _get_quota_bytes(repo)
 
     if storage_used is not None and quota and quota > 0:
-        return round((storage_used / quota) * 100, 1)
+        return round((storage_used / quota) * 100, 2)
     return None
 
 
 def _get_last_backup(repo: dict[str, Any]) -> datetime | None:
-    """Extract and parse the last backup timestamp."""
+    """Extract and parse the last backup timestamp (BorgWarehouse field: lastSave)."""
     candidates = [
+        repo.get("lastSave"),
         repo.get("lastBackup"),
         repo.get("last_backup"),
         repo.get("latestBackup"),
         repo.get("lastArchive"),
-        repo.get("last_archive"),
-        repo.get("lastSeen"),
-        repo.get("last_seen"),
         repo.get("updatedAt"),
-        repo.get("lastBackupDate"),
     ]
     for candidate in candidates:
-        parsed = _parse_timestamp(candidate)
-        if parsed:
-            return parsed
+        if candidate is not None:
+            parsed = _parse_timestamp(candidate)
+            if parsed:
+                return parsed
     return None
 
 
@@ -201,8 +204,12 @@ class BorgWarehouseSensor(CoordinatorEntity[BorgWarehouseCoordinator], SensorEnt
         repo = self.coordinator.data.get(self.repo_id, {})
         attrs: dict[str, Any] = {}
         if self.entity_description.key == "storage_used":
-            # Expose raw repo dictionary for easy inspection and debugging
-            attrs["raw_repo_data"] = repo
+            if "appendOnlyMode" in repo:
+                attrs["append_only_mode"] = repo["appendOnlyMode"]
+            if "alert" in repo:
+                attrs["alert_threshold_seconds"] = repo["alert"]
             if "repositoryName" in repo:
                 attrs["repository_name"] = repo["repositoryName"]
+            if "comment" in repo and repo["comment"]:
+                attrs["comment"] = repo["comment"]
         return attrs
